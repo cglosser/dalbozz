@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::env;
 
 #[macro_use]
@@ -9,35 +8,34 @@ extern crate serde_json;
 mod whimsy;
 use whimsy::*;
 
+mod polls;
+use polls::{PollError, Polls};
+
 mod slash_commands;
 
 use serenity::{
     async_trait,
     model::{
-        channel::Message,
-        gateway::Ready,
-        id::{ChannelId, UserId},
-        interactions::Interaction,
+        channel::Message, gateway::Ready, id::UserId, interactions::Interaction,
     },
     prelude::*,
-    utils::MessageBuilder,
 };
 
 struct Handler;
 
-struct UpcomingPolls;
-impl TypeMapKey for UpcomingPolls {
-    type Value = HashMap<UserId, UpcomingPoll>;
-}
-
-struct UpcomingPoll {
-    channel_to_post: ChannelId,
-    game_names: Vec<String>,
+impl TypeMapKey for Polls {
+    type Value = Polls;
 }
 
 struct BotUserId;
 impl TypeMapKey for BotUserId {
     type Value = UserId;
+}
+
+impl Handler {
+    fn log_err(&self, _err: PollError) {
+        // TODO
+    }
 }
 
 #[async_trait]
@@ -68,41 +66,12 @@ impl EventHandler for Handler {
 
         if msg.is_private() {
             let mut data = ctx.data.write().await;
-            let polls = data.get_mut::<UpcomingPolls>().unwrap();
-            let mut poll = polls.get_mut(&msg.author.id);
-            match poll {
-                None => {
-                    let res = msg
-                        .reply(&ctx, "You don't have any polls in preparation")
-                        .await;
-                    if let Err(err) = res {
-                        println!("Error chastising user: {:?}", err);
-                    }
-                }
-                Some(ref mut poll) => {
-                    if msg.content.to_lowercase() == "done" {
-                        println!("Posting poll");
-                        let game_names = poll.game_names.join("\n");
-                        let poll_post = MessageBuilder::new()
-                            .mention(&msg.author)
-                            .push(" is looking for a group.  ")
-                            .push("Game options are:\n")
-                            .push(game_names)
-                            .build();
-                        let res =
-                            poll.channel_to_post.say(&ctx, poll_post).await;
-                        if let Err(err) = res {
-                            println!("Couldn't make the poll in the original channel: {:?}", err);
-                        }
-                    } else {
-                        println!(
-                            "Adding another game to the poll: {}",
-                            msg.content
-                        );
-                        poll.game_names.push(msg.content);
-                    }
-                }
-            }
+            let polls = data.get_mut::<Polls>().unwrap();
+            polls
+                .respond_to_private_message(msg)
+                .await
+                .err()
+                .map(|e| self.log_err(e));
         }
     }
 
@@ -110,48 +79,22 @@ impl EventHandler for Handler {
     async fn interaction_create(&self, ctx: Context, command: Interaction) {
         println!("Slash command: {:?}", command);
 
-        let res = slash_commands::send_response(&command, false, None).await;
+        slash_commands::send_response(&command, false, None)
+            .await
+            .err()
+            .map(|e| self.log_err(e.into()));
 
-        if let Err(err) = res {
-            println!(
-                "Error replying to {} ({}): {:?}",
-                command.member.user.name,
-                command.member.nick.unwrap_or("no nickname".to_string()),
-                err
-            );
-            return;
+        if command.data.as_ref().map(|d| &d.name) == Some(&"lfg".to_string()) {
+            let mut data = ctx.data.write().await;
+            let polls = data.get_mut::<Polls>().unwrap();
+            polls
+                .start_new(command.member.user, command.channel_id)
+                .await
+                .err()
+                .map(|e| self.log_err(e));
+        } else {
+            println!("Unknown command: {:?}", command);
         }
-
-        let reply = MessageBuilder::new()
-            .mention(&command.member.user)
-            .push(" has started a new LFG.  ")
-            .push("When done, it will be posted to this channel")
-            .build();
-
-        let res = command.channel_id.say(&ctx.http, &reply).await;
-        if let Err(err) = res {
-            println!("Error posting message: {:?}", err);
-        }
-
-        let pm = "It looks like you're using LFG.  Reply with the name of each game in the poll, then reply 'Done'.";
-        let res = command
-            .member
-            .user
-            .direct_message(&ctx.http, |m| m.content(&pm))
-            .await;
-        if let Err(err) = res {
-            println!("Error initiating config: {:?}", err);
-        }
-
-        let mut data = ctx.data.write().await;
-        let polls = data.get_mut::<UpcomingPolls>().unwrap();
-        polls.insert(
-            command.member.user.id,
-            UpcomingPoll {
-                channel_to_post: command.channel_id,
-                game_names: Vec::new(),
-            },
-        );
     }
 }
 
@@ -180,7 +123,7 @@ async fn main() {
 
     {
         let mut data = client.data.write().await;
-        data.insert::<UpcomingPolls>(HashMap::new());
+        data.insert::<Polls>(Polls::new(client.cache_and_http.http.clone()));
     }
 
     // Finally, start a single shard, and start listening to events.
