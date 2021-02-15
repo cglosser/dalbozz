@@ -13,13 +13,7 @@ use polls::{PollError, Polls};
 
 mod slash_commands;
 
-use serenity::{
-    async_trait,
-    model::{
-        channel::Message, gateway::Ready, id::UserId, interactions::Interaction,
-    },
-    prelude::*,
-};
+use serenity::{async_trait, model::prelude::*, prelude::*};
 
 struct Handler;
 
@@ -95,6 +89,10 @@ impl EventHandler for Handler {
         } else {
             println!("Unknown command: {:?}", command);
         }
+    }
+
+    async fn reaction_add(&self, _ctx: Context, reaction: Reaction) {
+        println!("Reaction = {:?}", reaction);
     }
 }
 

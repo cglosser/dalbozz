@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::convert::TryFrom;
 use std::sync::Arc;
 
 use itertools::Itertools;
@@ -6,7 +7,7 @@ use itertools::Itertools;
 use serenity::{
     http::client::Http,
     model::{
-        channel::Message,
+        channel::{Message, ReactionType},
         id::{ChannelId, UserId},
         user::User,
     },
@@ -68,7 +69,7 @@ impl Polls {
             .push("When done, it will be posted to this channel")
             .build();
 
-        channel.say(&self.http, reply).await?;
+        channel.say(&self.http, &reply).await?;
 
         let pm = "It looks like you're using LFG.  Reply with the name of each game in the poll, then reply 'Done'.";
         user.direct_message(&self.http, |m| m.content(&pm)).await?;
@@ -123,8 +124,10 @@ impl UpcomingPoll {
             .to_owned()
             .collect::<HashSet<_>>();
 
-        let icon = (b'a'..=b'z')
-            .map(|c| format!(":regional_indicator_{}:", c as char))
+        let icon = (0..26)
+            // Map onto Regional indicator symbols
+            // https://en.wikipedia.org/wiki/Regional_indicator_symbol
+            .map(|c| std::char::from_u32(0x1F1E6 + c).unwrap().to_string())
             .filter(|c| !existing_icons.contains(c))
             .next()
             .ok_or(PollError::TooManyOptions)?;
@@ -155,7 +158,17 @@ impl UpcomingPoll {
     }
 
     async fn post(&self, ctx: &Arc<Http>) -> Result<(), PollError> {
-        self.channel_to_post.say(&ctx, self.poll_text()).await?;
+        let res =
+            self.channel_to_post
+                .send_message(&ctx, |m| {
+                    m.content(self.poll_text());
+                    m.reactions(self.games.iter().map(|g| {
+                        ReactionType::try_from(g.icon.as_str()).unwrap()
+                    }));
+                    m
+                })
+                .await;
+        println!("Res = {:?}", res);
         println!("Posted poll to the channel");
 
         Ok(())
