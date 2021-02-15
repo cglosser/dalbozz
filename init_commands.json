@@ -1,0 +1,11 @@
+{
+    "name": "lfg",
+    "description": "Looking for group system",
+    "options": [
+        {
+            "name": "new",
+            "description": "Make a new Looking For Group poll",
+            "type": 1
+        }
+    ]
+}
